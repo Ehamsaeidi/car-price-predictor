@@ -1,0 +1,16 @@
+{
+  "r2": -0.06540634106886256,
+  "mae": 24525.352491066664,
+  "rmse": 28409.54283182205,
+  "features": [
+    "Brand",
+    "Year",
+    "Engine Size",
+    "Fuel Type",
+    "Transmission",
+    "Mileage",
+    "Condition",
+    "Model"
+  ],
+  "note": "Car ID removed"
+}
