@@ -76,6 +76,27 @@ def create_app():
 
 app = create_app()
 
+# -------- Serve frontend (index.html, app.js, style.css) --------
+import os
+from flask import send_from_directory
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_DIR = os.path.join(ROOT_DIR, "frontend")
+
+@app.get("/")
+def index_html():
+    # Serves the main HTML file
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+@app.get("/<path:path>")
+def static_files(path):
+    # Serves static files (app.js, style.css, images, etc.)
+    return send_from_directory(FRONTEND_DIR, path)
+# ----------------------------------------------------------------
+
+
 if __name__ == "__main__":
     # Respect PORT env var on platforms like Railway/Render/Heroku
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+
