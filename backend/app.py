@@ -1,129 +1,81 @@
-from __future__ import annotations
-import json
-import os
-from pathlib import Path
+# app.py
+# Flask backend for car price prediction.
+# Accepts raw text/numeric inputs from the frontend and relies on a
+# saved sklearn Pipeline (with ColumnTransformer + OneHotEncoder)
+# so that string features can be fed directly without manual label encoding.
 
+from flask import Flask, request, jsonify, Blueprint
+from flask_cors import CORS
 import joblib
 import pandas as pd
-from flask import Flask, jsonify, request
+import os
 
-# Paths
-HERE = Path(__file__).resolve().parent
-MODEL_PATH = HERE / "model.joblib"
-META_PATH = HERE / "model_meta.json"
+# Load model/pipeline once at startup.
+# Tip: keep this a full sklearn Pipeline that includes preprocessing (e.g., OneHotEncoder)
+MODEL_PATH = os.getenv("MODEL_PATH", "model.joblib")
+pipe = joblib.load(MODEL_PATH)
 
-# Load model & metadata
-if not MODEL_PATH.exists():
-    raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+api = Blueprint("api", __name__)
 
-model = joblib.load(MODEL_PATH)
-
-features: list[str] = []
-if META_PATH.exists():
-    try:
-        meta = json.loads(META_PATH.read_text(encoding="utf-8"))
-        features = meta.get("features") or meta.get("columns") or []
-    except Exception:
-        features = []
-
-app = Flask(__name__)
-
-
-def build_row(payload: dict) -> pd.DataFrame:
-    """
-    Convert payload to a single-row dataframe.
-    Keeps feature order from metadata.
-    Unknown features ignored, missing ones filled with 0.
-    """
-    row = {}
-
-    if features:
-        for f in features:
-            v = payload.get(f, 0)
-            try:
-                row[f] = float(v)
-            except Exception:
-                row[f] = 0.0
-        columns = features
-    else:
-        for k, v in payload.items():
-            try:
-                row[k] = float(v)
-            except Exception:
-                row[k] = 0.0
-        columns = list(row.keys())
-
-    df = pd.DataFrame([row], columns=columns)
-    return df
-
-
-@app.get("/health")
+@api.get("/health")
 def health():
-    return jsonify({"service": "car-price-predictor", "status": "running"})
+    # Simple health endpoint for deployment checks
+    return {"status": "ok", "model": os.path.basename(MODEL_PATH)}
 
-
-@app.get("/")
-def index():
-    if not features:
-        return (
-            "<h2>Car Price Predictor</h2>"
-            "<p>No features found in model_meta.json.</p>"
-            "<p>Send JSON POST to /predict</p>"
-        )
-
-    inputs_html = ""
-    for f in features:
-        inputs_html += (
-            f'<div style="margin:8px 0;">'
-            f'<label style="display:inline-block;width:120px">{f}</label>'
-            f'<input name="{f}" type="number" step="any" required>'
-            f"</div>"
-        )
-
-    html = f"""
-    <html>
-      <head>
-        <meta charset="utf-8"/>
-        <title>Car Price Predictor</title>
-      </head>
-      <body style="font-family:Arial, sans-serif; max-width:720px; margin:40px auto;">
-        <h2>Car Price Predictor</h2>
-        <form method="POST" action="/predict">
-          {inputs_html}
-          <button type="submit" style="padding:8px 16px;">Predict</button>
-        </form>
-        <p style="margin-top:20px; color:#666">
-          Or send JSON POST to <code>/predict</code>.
-        </p>
-      </body>
-    </html>
-    """
-    return html
-
-
-@app.route("/predict", methods=["POST"])
+@api.post("/predict")
 def predict():
-    if request.is_json:
-        payload = request.get_json(silent=True) or {}
-    else:
-        payload = {k: v for k, v in request.form.items()}
+    """
+    Expected JSON body:
+    {
+      "features": {
+        "Brand": "...",
+        "Model": "...",
+        "Year": 2020,
+        "Engine Size": 1.6,
+        "Fuel Type": "...",
+        "Transmission": "...",
+        "Mileage": 45000,
+        "Condition": "..."
+      }
+    }
+    """
+    data = request.get_json(force=True) or {}
+    feats = data.get("features", data)
 
+    # Light input validation & numeric coercion (keep strings as-is for OHE)
     try:
-        X = build_row(payload)
-        y_pred = model.predict(X)
-        predicted_value = float(y_pred[0])
+        # Coerce numeric fields if present
+        if "Year" in feats:
+            feats["Year"] = int(feats["Year"])
+        if "Engine Size" in feats:
+            feats["Engine Size"] = float(feats["Engine Size"])
+        if "Mileage" in feats:
+            feats["Mileage"] = float(feats["Mileage"])
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+        return jsonify({"error": f"Invalid numeric field: {e}"}), 400
 
-    if not request.is_json:
-        return (
-            f"<h3>Predicted price: {predicted_value:,.2f}</h3>"
-            '<p><a href="/">Back</a></p>'
-        )
+    # Convert to DataFrame so ColumnTransformer can access columns by name
+    X = pd.DataFrame([feats])
 
-    return jsonify({"ok": True, "prediction": predicted_value})
+    # Run prediction
+    try:
+        y = pipe.predict(X)[0]
+    except Exception as e:
+        # Most common issues: missing columns, wrong dtypes, pipeline mismatch
+        return jsonify({"error": f"Prediction failed: {e}"}), 400
 
+    # Return a plain number; format on the frontend if you want commas, currency, etc.
+    return jsonify({"predicted_price": float(y)})
+
+def create_app():
+    app = Flask(__name__)
+    # Enable CORS only if frontend is served from a different origin
+    CORS(app)
+    app.register_blueprint(api, url_prefix="/api")
+    return app
+
+app = create_app()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # Respect PORT env var on platforms like Railway/Render/Heroku
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
