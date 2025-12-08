@@ -1,71 +1,79 @@
+from __future__ import annotations
+import json
 import os
+from pathlib import Path
+
 import joblib
 import pandas as pd
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Flask, jsonify, request
 
-# ----------------------------
-# App Setup
-# ----------------------------
+# -------------------------------------------------
+# Paths (relative to this file)
+# -------------------------------------------------
+HERE = Path(__file__).resolve().parent
+MODEL_PATH = HERE / "model.joblib"
+META_PATH = HERE / "model_meta.json"
+
+# -------------------------------------------------
+# Load model and metadata
+# -------------------------------------------------
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+
+model = joblib.load(MODEL_PATH)
+
+features: list[str] = []
+if META_PATH.exists():
+    try:
+        meta = json.loads(META_PATH.read_text(encoding="utf-8"))
+        # expected format: {"features": ["year", "mileage", ...]}
+        features = meta.get("features") or meta.get("columns") or []
+    except Exception:
+        features = []
+
 app = Flask(__name__)
-CORS(app)
 
-# ----------------------------
-# Load Model at Startup
-# ----------------------------
-MODEL_PATH = os.environ.get("MODEL_PATH", "model.joblib")
 
-try:
-    pipe = joblib.load(MODEL_PATH)
-except Exception as e:
-    pipe = None
-    app.logger.error(f"Failed to load model from {MODEL_PATH}: {e}")
+# -------------------------------------------------
+# Build a 1-row DataFrame in correct order
+# -------------------------------------------------
+def build_row(payload: dict) -> pd.DataFrame:
+    """
+    Convert a dict of {feature: value} into a single-row DataFrame.
+    Missing features = 0, extra keys ignored.
+    """
+    row = {}
+    if features:
+        for f in features:
+            v = payload.get(f, 0)
+            try:
+                row[f] = float(v)
+            except Exception:
+                row[f] = 0.0
+        columns = features
+    else:
+        # If no metadata, fall back to whatever keys are provided
+        for k, v in payload.items():
+            try:
+                row[k] = float(v)
+            except Exception:
+                row[k] = 0.0
+        columns = list(row.keys())
 
-# ----------------------------
-# Root Route (for Railway check)
-# ----------------------------
-@app.get("/")
-def home():
-    return jsonify({
-        "service": "car-price-predictor",
-        "status": "running"
-    }), 200
+    df = pd.DataFrame([row], columns=columns)
+    return df
 
-# ----------------------------
-# Health Check Route
-# ----------------------------
+
+# -------------------------------------------------
+# Routes
+# -------------------------------------------------
 @app.get("/health")
 def health():
-    status = "ok" if pipe is not None else "model_not_loaded"
-    return jsonify({"status": status})
+    return jsonify({"service": "car-price-predictor", "status": "running"})
 
-# ----------------------------
-# Prediction Route
-# ----------------------------
-@app.post("/predict")
-def predict():
-    if pipe is None:
-        return jsonify({"error": "Model not loaded on server."}), 500
 
-    try:
-        data = request.get_json(force=True) or {}
-
-        # Support both {"features": {...}} and flat {...}
-        feats = data.get("features", data)
-
-        # Convert to dataframe
-        X = pd.DataFrame([feats])
-
-        y = pipe.predict(X)[0]
-        return jsonify({"predicted_price": float(y)})
-
-    except Exception as e:
-        app.logger.exception("Prediction error")
-        return jsonify({"error": str(e)}), 400
-
-# ----------------------------
-# Local Dev Server (Gunicorn is used in production)
-# ----------------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+@app.get("/")
+def index():
+    if not features:
+        return (
+            "<h2>Car Price Pre
