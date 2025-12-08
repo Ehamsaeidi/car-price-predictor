@@ -1,26 +1,21 @@
+# backend/Dockerfile
 FROM python:3.11-slim
 
+# Create app dir
 WORKDIR /app
 
-# Install system dependencies (needed by numpy/pandas/scikit)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy dependency list
-COPY requirements.txt .
-
-# Install Python dependencies
+# Install Python deps
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source code
-COPY . .
+# Copy BOTH backend and frontend into the image
+COPY backend/ ./backend
+COPY frontend/ ./frontend
 
-# Make shell script executable
-RUN chmod +x start.sh
+# Railway provides PORT; we default to 8080
+ENV PORT=8080
+EXPOSE 8080
 
-# Expose port (Render/Fly/Railway detect automatically)
-EXPOSE 5000
-
-# Start server
-CMD ["./start.sh"]
+# Run from backend folder
+WORKDIR /app/backend
+CMD ["bash", "start.sh"]
