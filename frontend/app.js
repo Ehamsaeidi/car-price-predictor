@@ -2,8 +2,8 @@
 // # CONFIGURATION
 // =========================
 
-// # The public backend URL deployed on Railway
-const BACKEND_URL = "https://car-price-predictor-production-c712.up.railway.app";
+// # The public backend URL deployed on Railway (BACKEND)
+const BACKEND_URL = "https://selfless-grace-production.up.railway.app";
 
 // # Clean and validate the backend URL
 function getApiBase() {
@@ -47,7 +47,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
   }
 
   out.textContent = "Predicting...";
-  submitBtn && (submitBtn.disabled = true); // # Disable submit button
+  if (submitBtn) submitBtn.disabled = true; // # Disable submit button
 
   // =========================
   // # CALLING BACKEND API
@@ -76,8 +76,4 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 
     const price = Number(data.prediction);
     if (!Number.isFinite(price)) {
-      throw new Error("Prediction is not a number");
-    }
-
-    // # Format prediction as currency
-    const form
+      throw new
