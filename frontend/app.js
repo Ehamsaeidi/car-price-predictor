@@ -1,49 +1,83 @@
-// ---------- API base (Local vs. Railway) ----------
-// When running on your laptop use the local Flask port,
-// otherwise use the public Railway backend URL.
-const RAILWAY_BASE = 'https://car-price-predictor-production-c712.up.railway.app';
-const API_BASE =
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-    ? 'http://localhost:5000'
-    : RAILWAY_BASE;
+// =========================
+// # CONFIGURATION
+// =========================
 
-// Small helper to avoid double slashes in URLs
-const join = (base, path) => `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+// # The public backend URL deployed on Railway
+const BACKEND_URL = "https://car-price-predictor-production-c712.up.railway.app";
 
-// ---------- Form submit handler ----------
-document.getElementById('form').addEventListener('submit', async (e) => {
-  e.preventDefault();
+// # Clean and validate the backend URL
+function getApiBase() {
+  if (BACKEND_URL && BACKEND_URL !== "") {
+    return BACKEND_URL.replace(/\/+$/, ""); // # Remove trailing slashes
+  }
+  return window.location.origin.replace(/\/+$/, ""); // # Fallback: current domain
+}
 
-  // Collect the form fields and coerce numeric values
+// # Final API base URL used for sending requests
+const API_BASE = getApiBase();
+
+// =========================
+// # FORM SUBMISSION HANDLER
+// =========================
+
+document.getElementById("form").addEventListener("submit", async (e) => {
+  e.preventDefault(); // # Prevent page refresh
+
+  const submitBtn = e.target.querySelector('[type="submit"]');
+  const out = document.getElementById("output");
   const formData = new FormData(e.target);
-  const features = {};
+
+  // =========================
+  // # BUILDING PAYLOAD SAFELY
+  // =========================
+
+  const payload = {};
+
   for (const [k, v] of formData.entries()) {
-    features[k] = (v !== '' && isFinite(v)) ? Number(v) : v;
+    const raw = String(v).trim();
+
+    // # Attempt to convert to valid number
+    const maybeNum = Number(raw);
+    const isNumeric =
+      raw !== "" &&
+      Number.isFinite(maybeNum) &&
+      /^-?\d+(\.\d+)?$/.test(raw);
+
+    payload[k] = isNumeric ? maybeNum : raw; // # Numeric OR string
   }
 
-  const out = document.getElementById('output');
-  out.textContent = 'Predicting...';
+  out.textContent = "Predicting...";
+  submitBtn && (submitBtn.disabled = true); // # Disable submit button
+
+  // =========================
+  // # CALLING BACKEND API
+  // =========================
 
   try {
-    const res = await fetch(join(API_BASE, '/predict'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ features }),
+    const url = new URL("/predict", API_BASE).toString(); // # Build final API URL
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ features: payload }), // # Send features object
     });
 
-    // Parse response
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'Request failed');
+    const data = await res.json().catch(() => ({})); // # Safe JSON parse
 
-    // Pretty-print currency
+    // # Handle failed API response
+    if (!res.ok) {
+      const msg = data?.error || `${res.status} ${res.statusText}`;
+      throw new Error(msg);
+    }
+
+    // =========================
+    // # VALIDATE PREDICTION
+    // =========================
+
     const price = Number(data.prediction);
-    const formatted = new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: 'USD',
-    }).format(price);
+    if (!Number.isFinite(price)) {
+      throw new Error("Prediction is not a number");
+    }
 
-    out.textContent = `Estimated price: ${formatted}`;
-  } catch (err) {
-    out.textContent = `Error: ${err.message}`;
-  }
-});
+    // # Format prediction as currency
+    const form
