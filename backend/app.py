@@ -1,53 +1,95 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import joblib, json
+from pathlib import Path
+
+# Paths
+MODEL_PATH = Path("model.joblib")
+META_PATH = Path("model_meta.json")
+
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Lazy-load so import doesn't crash
+model = None
+model_meta = None
+
+def ensure_model():
+    global model, model_meta
+    if model is None:
+        if not MODEL_PATH.exists():
+            raise RuntimeError("Model file not found: model.joblib")
+        model = joblib.load(MODEL_PATH)
+    if model_meta is None and META_PATH.exists():
+        try:
+            model_meta = json.loads(META_PATH.read_text())
+        except Exception:
+            model_meta = {}
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"})
+
+@app.get("/meta")
+def meta():
+    try:
+        ensure_model()
+        return jsonify(model_meta or {"message": "No meta available"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.post("/predict")
 def predict():
     try:
-        ensure_model()  # make sure model & meta are loaded
+        ensure_model()
         data = request.get_json(force=True) or {}
         feats = (data.get("features") or {}).copy()
 
-        # ---- Coerce + derive features ----
-        # to numbers when possible
+        # ---- coerce numbers
         def to_num(x):
             try:
-                return float(x)
+                if x is None or x == "":
+                    return None
+                v = float(x)
+                # keep ints as int
+                return int(v) if v.is_integer() else v
             except Exception:
                 return x
 
-        if "Year" in feats:
-            feats["Year"] = to_num(feats["Year"])
-        if "Engine Size" in feats:
-            feats["Engine Size"] = to_num(feats["Engine Size"])
-        if "Mileage" in feats:
-            feats["Mileage"] = to_num(feats["Mileage"])
+        # numeric fields if present
+        for k in ["Year", "Engine Size", "Mileage"]:
+            if k in feats:
+                feats[k] = to_num(feats[k])
 
-        # Derive Age if missing: current_year - Year
-        if "Age" not in feats and "Year" in feats and isinstance(feats["Year"], (int, float)):
+        # ---- derive features if missing
+        # Age = current_year - Year
+        if "Age" not in feats and isinstance(feats.get("Year"), (int, float)):
             from datetime import datetime
-            current_year = datetime.utcnow().year
-            feats["Age"] = max(0, current_year - int(feats["Year"]))
+            feats["Age"] = max(0, datetime.utcnow().year - int(feats["Year"]))
 
-        # Derive Mileage_log if missing: log1p(Mileage)
-        if "Mileage_log" not in feats and "Mileage" in feats and isinstance(feats["Mileage"], (int, float)):
+        # Mileage_log = log1p(Mileage)
+        if "Mileage_log" not in feats and isinstance(feats.get("Mileage"), (int, float)):
             import math
             feats["Mileage_log"] = math.log1p(max(0.0, float(feats["Mileage"])))
 
-        # ---- Reorder/complete columns as model expects ----
+        # ---- align to model columns if provided in meta
         import pandas as pd
         cols = (model_meta or {}).get("feature_columns")
         X = pd.DataFrame([feats])
 
         if cols:
-            # add any missing expected columns with NA
             for c in cols:
                 if c not in X.columns:
                     X[c] = pd.NA
-            # keep only expected columns & order them
-            X = X[cols]
+            X = X[cols]  # reorder & keep only expected columns
 
-        # ---- Predict ----
+        # ---- predict
         yhat = model.predict(X)[0]
         return jsonify({"prediction": float(yhat)})
 
     except Exception as e:
-        # return clear message to frontend
         return jsonify({"error": str(e)}), 400
+
+if __name__ == "__main__":
+    # for local dev only; in production gunicorn runs: app:app
+    app.run(host="0.0.0.0", port=5000)
