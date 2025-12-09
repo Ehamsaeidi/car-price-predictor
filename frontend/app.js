@@ -76,4 +76,20 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 
     const price = Number(data.prediction);
     if (!Number.isFinite(price)) {
-      throw new
+      throw new Error("Prediction is not a number");
+    }
+
+    // # Format prediction as currency
+    const formatted = new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(price);
+
+    out.textContent = `Estimated price: ${formatted}`;
+  } catch (err) {
+    out.textContent = `Error: ${err.message}`;
+  } finally {
+    if (submitBtn) submitBtn.disabled = false; // # Re-enable submit button
+  }
+});
