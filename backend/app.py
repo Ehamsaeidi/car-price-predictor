@@ -1,53 +1,53 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import joblib, json
-from pathlib import Path
-
-MODEL_PATH = Path("model.joblib")
-META_PATH = Path("model_meta.json")
-
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-# Lazy-load to avoid crash on import time
-model = None
-model_meta = None
-
-def ensure_model():
-    global model, model_meta
-    if model is None:
-        if not MODEL_PATH.exists():
-            raise RuntimeError("Model file not found: model.joblib")
-        model = joblib.load(MODEL_PATH)
-    if model_meta is None and META_PATH.exists():
-        model_meta = json.loads(META_PATH.read_text())
-
-@app.get("/health")
-def health():
-    # Light health (no heavy load)
-    return jsonify({"status": "ok"})
-
-@app.get("/meta")
-def meta():
-    try:
-        ensure_model()
-        return jsonify(model_meta or {"message": "No meta available"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.post("/predict")
 def predict():
     try:
-        ensure_model()
+        ensure_model()  # make sure model & meta are loaded
         data = request.get_json(force=True) or {}
-        feats = data.get("features") or {}
+        feats = (data.get("features") or {}).copy()
+
+        # ---- Coerce + derive features ----
+        # to numbers when possible
+        def to_num(x):
+            try:
+                return float(x)
+            except Exception:
+                return x
+
+        if "Year" in feats:
+            feats["Year"] = to_num(feats["Year"])
+        if "Engine Size" in feats:
+            feats["Engine Size"] = to_num(feats["Engine Size"])
+        if "Mileage" in feats:
+            feats["Mileage"] = to_num(feats["Mileage"])
+
+        # Derive Age if missing: current_year - Year
+        if "Age" not in feats and "Year" in feats and isinstance(feats["Year"], (int, float)):
+            from datetime import datetime
+            current_year = datetime.utcnow().year
+            feats["Age"] = max(0, current_year - int(feats["Year"]))
+
+        # Derive Mileage_log if missing: log1p(Mileage)
+        if "Mileage_log" not in feats and "Mileage" in feats and isinstance(feats["Mileage"], (int, float)):
+            import math
+            feats["Mileage_log"] = math.log1p(max(0.0, float(feats["Mileage"])))
+
+        # ---- Reorder/complete columns as model expects ----
         import pandas as pd
+        cols = (model_meta or {}).get("feature_columns")
         X = pd.DataFrame([feats])
+
+        if cols:
+            # add any missing expected columns with NA
+            for c in cols:
+                if c not in X.columns:
+                    X[c] = pd.NA
+            # keep only expected columns & order them
+            X = X[cols]
+
+        # ---- Predict ----
         yhat = model.predict(X)[0]
         return jsonify({"prediction": float(yhat)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
 
-if __name__ == "__main__":
-    # Local dev only (gunicorn uses import path app:app)
-    app.run(host="0.0.0.0", port=5000)
+    except Exception as e:
+        # return clear message to frontend
+        return jsonify({"error": str(e)}), 400
